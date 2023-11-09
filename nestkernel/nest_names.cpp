@@ -419,6 +419,7 @@ const Name rule( "rule" );
 
 const Name S( "S" );
 const Name S_act_NMDA( "S_act_NMDA" );
+const Name SIC( "SIC" );
 const Name SIC_scale( "SIC_scale" );
 const Name SIC_th( "SIC_th" );
 const Name sdev( "sdev" );
