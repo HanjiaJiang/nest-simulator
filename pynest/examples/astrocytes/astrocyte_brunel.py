@@ -75,8 +75,8 @@ sim_params = {
     "dt": 0.1,  # simulation resolution in ms
     "pre_sim_time": 100.0,  # pre-simulation time in ms (data not recorded)
     "sim_time": 1000.0,  # simulation time in ms
-    "N_rec_spk": 100,  # number of samples (neuron) for spike detector
-    "N_rec_mm": 50,  # number of samples (neuron, astrocyte) for multimeter
+    "N_rec_spk": 100,  # number of neurons to record from with spike recorder
+    "N_rec_mm": 50,  # number of nodes (neurons, astrocytes) to record from with multimeter
     "n_threads": 4,  # number of threads for NEST
     "seed": 100,  # seed for the random module
 }
@@ -134,12 +134,27 @@ neuron_params_in = {
 # This function creates the nodes and build the network. The astrocytes only
 # respond to excitatory synaptic inputs; therefore, only the excitatory
 # neuron-neuron connections are paired with the astrocytes. The
-# TripartiteConnect() function and the "tripartite_bernoulli_with_pool" rule
+# ``TripartiteConnect()`` function and the ``tripartite_bernoulli_with_pool`` rule
 # are used to create the connectivity of the network.
 
 
 def create_astro_network(scale=1.0):
-    """Create nodes for a neuron-astrocyte network."""
+    """Create nodes for a neuron-astrocyte network.
+
+    Nodes in a neuron-astrocyte network are created according to the give scale
+    of the model. The nodes created include excitatory and inhibitory neruons,
+    astrocytes, and a Poisson generator.
+
+    Parameters
+    ---------
+    scale
+        Scale of the model.
+
+    Return values
+    -------------
+        Created nodes and Poisson generator.
+
+    """
     print("Creating nodes ...")
     assert scale >= 1.0, "scale must be >= 1.0"
     nodes_ex = nest.Create(neuron_model, int(network_params["N_ex"] * scale), params=neuron_params_ex)
@@ -151,7 +166,25 @@ def create_astro_network(scale=1.0):
 
 def connect_astro_network(nodes_ex, nodes_in, nodes_astro, nodes_noise, scale=1.0):
     """Connect the nodes in a neuron-astrocyte network.
-    The astrocytes are paired with excitatory connections only.
+
+    Nodes in a neuron-astrocyte network are connected. The connection
+    probability between neurons is divided by a the given scale to preserve
+    the expected number of connections for each node. The astrocytes are paired
+    with excitatory connections only.
+
+    Parameters
+    ---------
+    nodes_ex
+        Nodes of excitatory neurons.
+    nodes_in
+        Nodes of inhibitory neurons.
+    nodes_astro
+        Nodes of astrocytes.
+    node_noise
+        Poisson generator.
+    scale
+        Scale of the model.
+
     """
     print("Connecting Poisson generator ...")
     assert scale >= 1.0, "scale must be >= 1.0"
@@ -162,7 +195,9 @@ def connect_astro_network(nodes_ex, nodes_in, nodes_astro, nodes_noise, scale=1.
     conn_params_e = {
         "rule": "tripartite_bernoulli_with_pool",
         "p_primary": network_params["p_primary"] / scale,
-        "p_third_if_primary": network_params["p_third_if_primary"],
+        "p_third_if_primary": network_params[
+            "p_third_if_primary"
+        ],  # "p_third_if_primary" is scaled along with "p_primary", so no further scaling is required
         "pool_size": network_params["pool_size"],
         "pool_type": network_params["pool_type"],
     }
@@ -201,6 +236,22 @@ def connect_astro_network(nodes_ex, nodes_in, nodes_astro, nodes_noise, scale=1.
 
 
 def plot_dynamics(astro_data, neuron_data, start):
+    """Plot the dynamics in neurons and astrocytes.
+
+    The dynamics in the given neuron and astrocyte nodes are plotted. The
+    dynamics in clude IP3 and calcium in the astrocytes, and the SIC input to
+    the neurons.
+
+    Parameters
+    ---------
+    astro_data
+        Data of IP3 and calcium dynamics in the astrocytes.
+    neuron_data
+        Data of SIC input to the neurons.
+    start
+        Start time of the plotted dynamics.
+
+    """
     print("Plotting dynamics ...")
     # astrocyte data
     astro_mask = astro_data["times"] > start
@@ -256,6 +307,7 @@ def plot_dynamics(astro_data, neuron_data, start):
 
 
 def run_simulation():
+    """Run simulation of a neuron-astrocyte network."""
     # NEST configuration
     nest.ResetKernel()
     nest.resolution = sim_params["dt"]
@@ -263,27 +315,23 @@ def run_simulation():
     nest.print_time = True
     nest.overwrite_files = True
 
-    # Use random seed for reproducible sampling
+    # use random seed for reproducible sampling
     random.seed(sim_params["seed"])
 
-    # Simulation settings
+    # simulation settings
     pre_sim_time = sim_params["pre_sim_time"]
     sim_time = sim_params["sim_time"]
 
-    # Create and connect nodes
+    # create and connect nodes
     exc, inh, astro, noise = create_astro_network()
     connect_astro_network(exc, inh, astro, noise)
 
-    # Create and connect recorders (multimeter default resolution = 1 ms)
+    # create and connect recorders (multimeter default resolution = 1 ms)
     sr_neuron = nest.Create("spike_recorder")
     mm_neuron = nest.Create("multimeter", params={"record_from": ["I_SIC"]})
     mm_astro = nest.Create("multimeter", params={"record_from": ["IP3", "Ca"]})
 
-    # Run pre-simulation
-    print("Running pre-simulation ...")
-    nest.Simulate(pre_sim_time)
-
-    # Select nodes randomly and connect them with recorders
+    # select nodes randomly and connect them with recorders
     print("Connecting recorders ...")
     neuron_list = (exc + inh).tolist()
     astro_list = astro.tolist()
@@ -297,24 +345,28 @@ def run_simulation():
     nest.Connect(mm_neuron, neuron_list_for_mm)
     nest.Connect(mm_astro, astro_list_for_mm)
 
-    # Run simulation
+    # run pre-simulation
+    print("Running pre-simulation ...")
+    nest.Simulate(pre_sim_time)
+
+    # run simulation
     print("Running simulation ...")
     nest.Simulate(sim_time)
 
-    # Read out recordings
+    # read out recordings
     neuron_spikes = sr_neuron.events
     neuron_data = mm_neuron.events
     astro_data = mm_astro.events
 
-    # Make raster plot
+    # make raster plot
     nest.raster_plot.from_device(
         sr_neuron, hist=True, title=f"Raster plot of neuron {neuron_list_for_sr[0]} to {neuron_list_for_sr[-1]}"
     )
 
-    # Plot dynamics in astrocytes and neurons
-    plot_dynamics(astro_data, neuron_data, pre_sim_time)
+    # plot dynamics in astrocytes and neurons
+    plot_dynamics(astro_data, neuron_data, 0.0)
 
-    # Show plots
+    # show plots
     plt.show()
 
 
